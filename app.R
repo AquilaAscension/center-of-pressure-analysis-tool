@@ -7,7 +7,7 @@ library(plotly)
 library(pracma)
 library(wavelets)
 
-# Version: 1.1.1
+# Version: 1.2.0
 # Author: T. Vredeveld (GitHub: https://github.com/tomvredeveld)
 # Version management can be found here: https://github.com/tomvredeveld/center-of-pressure-analysis-tool
 
