@@ -12,13 +12,17 @@ library(wavelets)
 # Version management can be found here: https://github.com/tomvredeveld/center-of-pressure-analysis-tool
 
 # Helper function for DWT to data frame conversion
-dwt_to_dataframe <- function(dwt_result, signal_name) {
+dwt_to_dataframe <- function(dwt_result, signal_name, Fs, n_levels) {
   # Extract approximation and detail coefficients
-  approximation <- dwt_result@V[[1]]  # Extract the numeric vector from the list
-  details <- dwt_result@W  # This is already a list of numeric vectors
+  approximation <- dwt_result@V[[1]]
+  details <- dwt_result@W
   
   # Get the length of the original signal
   original_length <- length(dwt_result@series)
+  
+  # Calculate frequency range for approximation
+  approx_upper <- Fs / (2^(n_levels + 1))
+  approx_label <- paste0("Approximation (0-", round(approx_upper, 2), " Hz)")
   
   # Pad the approximation coefficients to match the original length
   approx_padded <- approx(seq_along(approximation) * 2^dwt_result@level, approximation, n = original_length)$y
@@ -27,12 +31,17 @@ dwt_to_dataframe <- function(dwt_result, signal_name) {
   approx_df <- data.frame(
     Time = seq_len(original_length),
     Coefficient = approx_padded,
-    Level = "Approximation",
+    Level = approx_label,
     Signal = signal_name
   )
   
   # Create a data frame for detail coefficients
   detail_dfs <- lapply(seq_along(details), function(i) {
+    # Calculate frequency range for this detail level
+    upper <- Fs / (2^i)
+    lower <- Fs / (2^(i + 1))
+    detail_label <- paste0("Detail ", i, " (", round(lower, 2), "-", round(upper, 2), " Hz)")
+    
     # Extract the numeric vector for the current detail level
     detail_coeffs <- details[[i]]
     
@@ -42,7 +51,7 @@ dwt_to_dataframe <- function(dwt_result, signal_name) {
     data.frame(
       Time = seq_len(original_length),
       Coefficient = detail_padded,
-      Level = paste("Detail", i),
+      Level = detail_label,
       Signal = signal_name
     )
   })
@@ -52,6 +61,8 @@ dwt_to_dataframe <- function(dwt_result, signal_name) {
   
   return(dwt_df)
 }
+
+
 
 ########### UI #################
 ui <- fluidPage(
@@ -464,36 +475,46 @@ server <- function(input, output) {
   ## Discrete Wavelet Transform
   
   output$dwt_plot_ml <- renderPlotly({
-    # Perform DWT on ML CoP data
-    dwt_copx <- dwt(filtered_data()$copx, filter = "d4", n.levels = 4)
-    
-    # Convert DWT results to a data frame
-    dwt_df_ml <- dwt_to_dataframe(dwt_copx, "ML CoP")
-    
-    # Create Plotly plot
-    plot_ly(dwt_df_ml, x = ~Time, y = ~Coefficient, color = ~Level, type = "scatter", mode = "lines") %>%
-      layout(
-        title = "DWT of ML CoP Signal",
-        xaxis = list(title = "Time"),
-        yaxis = list(title = "Coefficient Value"),
-        legend = list(title = list(text = "Level")))
-  })
-    
-    output$dwt_plot_ap <- renderPlotly({
-      # Perform DWT on AP CoP data
-      dwt_copy <- dwt(filtered_data()$copy, filter = "d4", n.levels = 4)
-      
-      # Convert DWT results to a data frame
-      dwt_df_ap <- dwt_to_dataframe(dwt_copy, "AP CoP")
-      
-      # Create Plotly plot
-      plot_ly(dwt_df_ap, x = ~Time, y = ~Coefficient, color = ~Level, type = "scatter", mode = "lines") %>%
-        layout(
-          title = "DWT of AP CoP Signal",
-          xaxis = list(title = "Time"),
-          yaxis = list(title = "Coefficient Value"),
-          legend = list(title = list(text = "Level")))
-    })
+  # Perform DWT on ML CoP data
+  dwt_copx <- dwt(filtered_data()$copx, filter = "d4", n.levels = 4)
+  
+  # Convert DWT results to a data frame (with frequency ranges)
+  dwt_df_ml <- dwt_to_dataframe(
+    dwt_result = dwt_copx,
+    signal_name = "ML CoP",
+    Fs = input$get_filter_frequency,  # Sampling frequency from the slider
+    n_levels = 4  # Number of decomposition levels
+  )
+  
+  # Create Plotly plot
+  plot_ly(dwt_df_ml, x = ~Time, y = ~Coefficient, color = ~Level, type = "scatter", mode = "lines") %>%
+    layout(
+      title = "DWT of ML CoP Signal",
+      xaxis = list(title = "Time"),
+      yaxis = list(title = "Coefficient Value"),
+      legend = list(title = list(text = "Level")))
+})
+
+output$dwt_plot_ap <- renderPlotly({
+  # Perform DWT on AP CoP data
+  dwt_copy <- dwt(filtered_data()$copy, filter = "d4", n.levels = 4)
+  
+  # Convert DWT results to a data frame (with frequency ranges)
+  dwt_df_ap <- dwt_to_dataframe(
+    dwt_result = dwt_copy,
+    signal_name = "AP CoP",
+    Fs = input$get_filter_frequency,  # Sampling frequency from the slider
+    n_levels = 4  # Number of decomposition levels
+  )
+  
+  # Create Plotly plot
+  plot_ly(dwt_df_ap, x = ~Time, y = ~Coefficient, color = ~Level, type = "scatter", mode = "lines") %>%
+    layout(
+      title = "DWT of AP CoP Signal",
+      xaxis = list(title = "Time"),
+      yaxis = list(title = "Coefficient Value"),
+      legend = list(title = list(text = "Level")))
+})
   
   ## Output COP Sway plot 1
   output$sway_area_1 <- renderPlotly({
