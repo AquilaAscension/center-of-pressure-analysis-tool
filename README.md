@@ -67,10 +67,12 @@ Please be aware that uploading your data to the web application also shares your
 I make no representations or warranties of any kind, express or implied, regarding the accuracy, reliability, or completeness of any information provided through this Center of Pressure Analysis Tool.
 
 ## Version
-Current: 1.1.1
+Current: 1.2.0
 
 Version management
 
+- 1.2.0 - Added additional COP parameters, download option for COP parameters,
+          and Wavelet Analysis tab
 - 1.1.1 - Small commit including colour changes and slight grammatical errors.
 - 1.1.0 - Added custom filter frequency.
 - 1.0.0 - First public version.  
