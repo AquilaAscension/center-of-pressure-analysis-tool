@@ -4,10 +4,54 @@ library(data.table)
 library(signal)
 library(ggplot2)
 library(plotly)
+library(pracma)
+library(wavelets)
 
 # Version: 1.1.1
 # Author: T. Vredeveld (GitHub: https://github.com/tomvredeveld)
 # Version management can be found here: https://github.com/tomvredeveld/center-of-pressure-analysis-tool
+
+# Helper function for DWT to data frame conversion
+dwt_to_dataframe <- function(dwt_result, signal_name) {
+  # Extract approximation and detail coefficients
+  approximation <- dwt_result@V[[1]]  # Extract the numeric vector from the list
+  details <- dwt_result@W  # This is already a list of numeric vectors
+  
+  # Get the length of the original signal
+  original_length <- length(dwt_result@series)
+  
+  # Pad the approximation coefficients to match the original length
+  approx_padded <- approx(seq_along(approximation) * 2^dwt_result@level, approximation, n = original_length)$y
+  
+  # Create a data frame for approximation coefficients
+  approx_df <- data.frame(
+    Time = seq_len(original_length),
+    Coefficient = approx_padded,
+    Level = "Approximation",
+    Signal = signal_name
+  )
+  
+  # Create a data frame for detail coefficients
+  detail_dfs <- lapply(seq_along(details), function(i) {
+    # Extract the numeric vector for the current detail level
+    detail_coeffs <- details[[i]]
+    
+    # Pad the detail coefficients to match the original length
+    detail_padded <- approx(seq_along(detail_coeffs) * 2^(i - 1), detail_coeffs, n = original_length)$y
+    
+    data.frame(
+      Time = seq_len(original_length),
+      Coefficient = detail_padded,
+      Level = paste("Detail", i),
+      Signal = signal_name
+    )
+  })
+  
+  # Combine all data frames
+  dwt_df <- do.call(rbind, c(list(approx_df), detail_dfs))
+  
+  return(dwt_df)
+}
 
 ########### UI #################
 ui <- fluidPage(
@@ -110,7 +154,8 @@ ui <- fluidPage(
                    timestamps you entered on the left. If no table is shown, please check your timestamps and make sure
                    these are values taken from the Plotly tab, using your mouse to hover over the signals."), 
                  h3("Table of COP parameters of the selected segment"),
-                 tableOutput("cop_table")),
+                 tableOutput("cop_table"),
+                 downloadButton("download_cop", "Download CoP Parameters as CSV")),
         tabPanel("Sway Area", 
                  br(), 
                  h2("Instructions"),
@@ -123,6 +168,14 @@ ui <- fluidPage(
                  h3("Plot of Sway Area"),
                  hr(),
                  splitLayout(cellWidths = c("50%", "50%"), plotlyOutput("sway_area_1"), plotlyOutput("sway_area_2"))),
+        tabPanel("Wavelet Analysis", 
+                 br(), 
+                 h2("Wavelet Decomposition"),
+                 hr(),
+                 p("Below, you can see the wavelet decomposition of the CoP signals."), 
+                 h3("Discrete Wavelet Transform (DWT)"),
+                 plotlyOutput("dwt_plot_ml"),
+                 plotlyOutput("dwt_plot_ap")),
         tabPanel("About", 
                  br(),
                  h2("About"),
@@ -178,6 +231,8 @@ server <- function(input, output) {
     # Set up libraries.
     library(PEIP)
     library(ggplot2)
+    library(pracma)
+    library(wavelets)
     
     # Create list to export calculations to.
     pea <- list(area = NULL, eigenvectors = NULL, eigenvalues = NULL, plot = NULL)
@@ -330,6 +385,10 @@ server <- function(input, output) {
     # Create segment of the filtered data based on timestamps 
     df_segment <- df[c(timestamp_one():timestamp_two()), ]
     
+    # Calculate mean of displacement
+    mean_copx <- mean(df_segment[, 2], na.rm = TRUE)
+    mean_copy <- mean(df_segment[, 3], na.rm = TRUE)
+    
     # Calculate STD's of displacement
     std_copx <- sd(df_segment[, 2], na.rm = TRUE)
     std_copy <- sd(df_segment[, 3], na.rm = TRUE)
@@ -341,24 +400,41 @@ server <- function(input, output) {
     mvelo_copx <- mean(abs(diff(mcopx)) / time_diff)
     mvelo_copy <- mean(abs(diff(mcopy)) / time_diff)
     
+    # Calculate resultant velocity
+    resultant_velocity <- mean(sqrt(diff(df_segment[, 2])^2 + diff(df_segment[, 3])^2) 
+                               / diff(df_segment[, 1]))
+    
     # Calculate COP pathlength by summation of Euclidian distances
     pathlength <- sum(sqrt((diff(mcopx)^2 + diff(mcopy)^2)))
     
     # Calculate 95% PEA
     segment_pea <- pea(df_segment[, 2], df_segment[, 3], probability = 0.95)
     
+    # Calculate sample entropy for ML and AP directions
+    sampen_copx <- sample_entropy(df_segment[, 2], edim = 2, r = 0.2 * sd(df_segment[, 2]))
+    sampen_copy <- sample_entropy(df_segment[, 3], edim = 2, r = 0.2 * sd(df_segment[, 3]))
+    
     # Put values in one table to return.
-    cop_table <- as.data.frame(matrix(NA, nrow = 6, ncol = 3))
+    cop_table <- as.data.frame(matrix(NA, nrow = 11, ncol = 3))
     names(cop_table) <- c("COP Parameter", "Value", "Units")
-    cop_parameters <- c("standard deviation of displacement - COP medio-lateral", 
+    cop_parameters <- c("mean displacement - COP medio-lateral", 
+                        "mean displacement - COP antero-posterior",
+                        "standard deviation of displacement - COP medio-lateral", 
                         "standard deviation of displacement - COP antero-posterior",
                         "mean velocity COP medio-lateral", 
-                        "mean velocity CoP antero-posterior",
-                        "CoP Pathlength", "CoP 95% PEA")
+                        "mean velocity COP antero-posterior",
+                        "resultant velocity",
+                        "CoP Pathlength", "CoP 95% PEA",
+                        "sample entropy - COP medio-lateral",
+                        "sample entropy - COP antero-posterior")
     cop_table[, 1] <- cop_parameters
-    cop_table[, 2] <- c(std_copx, std_copy, mvelo_copx, mvelo_copy, pathlength, segment_pea$area)
-    cop_table[, 3] <- c("in centimeter", "in centimeter", "in centimeter per second", "in centimeter per second",
-                        "in centimeters", "in cm2")
+    cop_table[, 2] <- c(mean_copx, mean_copy, std_copx, std_copy, 
+                        mvelo_copx, mvelo_copy, resultant_velocity, 
+                        pathlength, segment_pea$area, sampen_copx, sampen_copy)
+    cop_table[, 3] <- c("in centimeter", "in centimeter", "in centimeter", "in centimeter", 
+                        "in centimeter per second", "in centimeter per second",
+                        "in centimeter per second", "in centimeters", "in cm2",
+                        "unitless", "unitless")
     
     # Add objects to a list.
     analysis$cop_table <- cop_table
@@ -372,6 +448,52 @@ server <- function(input, output) {
     analysis_data <- analysis()
     return(analysis_data$cop_table)
   })
+  
+  ## Download option for COP parameters
+  output$download_cop <- downloadHandler(
+    filename = function() {
+      paste("cop_parameters_", Sys.Date(), ".csv", sep = "")  # File name with today's date
+    },
+    content = function(file) {
+      # Get the COP parameters table
+      cop_data <- analysis()$cop_table
+      # Save the table to a CSV file
+      write.csv(cop_data, file, row.names = FALSE)
+    })
+  
+  ## Discrete Wavelet Transform
+  
+  output$dwt_plot_ml <- renderPlotly({
+    # Perform DWT on ML CoP data
+    dwt_copx <- dwt(filtered_data()$copx, filter = "d4", n.levels = 4)
+    
+    # Convert DWT results to a data frame
+    dwt_df_ml <- dwt_to_dataframe(dwt_copx, "ML CoP")
+    
+    # Create Plotly plot
+    plot_ly(dwt_df_ml, x = ~Time, y = ~Coefficient, color = ~Level, type = "scatter", mode = "lines") %>%
+      layout(
+        title = "DWT of ML CoP Signal",
+        xaxis = list(title = "Time"),
+        yaxis = list(title = "Coefficient Value"),
+        legend = list(title = list(text = "Level")))
+  })
+    
+    output$dwt_plot_ap <- renderPlotly({
+      # Perform DWT on AP CoP data
+      dwt_copy <- dwt(filtered_data()$copy, filter = "d4", n.levels = 4)
+      
+      # Convert DWT results to a data frame
+      dwt_df_ap <- dwt_to_dataframe(dwt_copy, "AP CoP")
+      
+      # Create Plotly plot
+      plot_ly(dwt_df_ap, x = ~Time, y = ~Coefficient, color = ~Level, type = "scatter", mode = "lines") %>%
+        layout(
+          title = "DWT of AP CoP Signal",
+          xaxis = list(title = "Time"),
+          yaxis = list(title = "Coefficient Value"),
+          legend = list(title = list(text = "Level")))
+    })
   
   ## Output COP Sway plot 1
   output$sway_area_1 <- renderPlotly({
