@@ -446,7 +446,7 @@ server <- function(input, output) {
     cop_table[, 2] <- c(duration, mean_copx, mean_copy, std_copx, std_copy, 
                         mvelo_copx, mvelo_copy, resultant_velocity, 
                         pathlength, segment_pea$area, sampen_copx, sampen_copy)
-    cop_table[, 3] <- c("in seconds", in centimeter", "in centimeter", 
+    cop_table[, 3] <- c("in seconds", "in centimeter", "in centimeter", 
                         "in centimeter", "in centimeter", 
                         "in centimeter per second", "in centimeter per second",
                         "in centimeter per second", "in centimeters", "in cm2",
