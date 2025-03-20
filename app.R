@@ -395,6 +395,9 @@ server <- function(input, output) {
     
     # Create segment of the filtered data based on timestamps 
     df_segment <- df[c(timestamp_one():timestamp_two()), ]
+
+    # Calculate segment duration (end timestamp - start timestamp)
+    duration <- input$input_timestamp_two - input$input_timestamp_one
     
     # Calculate mean of displacement
     mean_copx <- mean(df_segment[, 2], na.rm = TRUE)
@@ -426,9 +429,10 @@ server <- function(input, output) {
     sampen_copy <- sample_entropy(df_segment[, 3], edim = 2, r = 0.2 * sd(df_segment[, 3]))
     
     # Put values in one table to return.
-    cop_table <- as.data.frame(matrix(NA, nrow = 11, ncol = 3))
+    cop_table <- as.data.frame(matrix(NA, nrow = 12, ncol = 3))
     names(cop_table) <- c("COP Parameter", "Value", "Units")
-    cop_parameters <- c("mean displacement - COP medio-lateral", 
+    cop_parameters <- c("Segment Duration",
+                        "mean displacement - COP medio-lateral", 
                         "mean displacement - COP antero-posterior",
                         "standard deviation of displacement - COP medio-lateral", 
                         "standard deviation of displacement - COP antero-posterior",
@@ -439,10 +443,11 @@ server <- function(input, output) {
                         "sample entropy - COP medio-lateral",
                         "sample entropy - COP antero-posterior")
     cop_table[, 1] <- cop_parameters
-    cop_table[, 2] <- c(mean_copx, mean_copy, std_copx, std_copy, 
+    cop_table[, 2] <- c(duration, mean_copx, mean_copy, std_copx, std_copy, 
                         mvelo_copx, mvelo_copy, resultant_velocity, 
                         pathlength, segment_pea$area, sampen_copx, sampen_copy)
-    cop_table[, 3] <- c("in centimeter", "in centimeter", "in centimeter", "in centimeter", 
+    cop_table[, 3] <- c("in seconds", in centimeter", "in centimeter", 
+                        "in centimeter", "in centimeter", 
                         "in centimeter per second", "in centimeter per second",
                         "in centimeter per second", "in centimeters", "in cm2",
                         "unitless", "unitless")
