@@ -388,7 +388,7 @@ server <- function(input, output) {
   ## Set analysis, based on input. 
   analysis <- reactive({
     # Set analysis pre-allocation list
-    analysis <- list(segment_pea = NULL, cop_table = NULL)
+    analysis <- list(segment_pea = NULL, cop_table = NULL, df_segment = NULL)
     
     # Take filtered data
     df <- filtered_data()
@@ -455,6 +455,7 @@ server <- function(input, output) {
     # Add objects to a list.
     analysis$cop_table <- cop_table
     analysis$segment_pea <- segment_pea
+    analysis$df_segment <- df_segment
     
     # Return element.
     return(analysis)})
@@ -480,46 +481,52 @@ server <- function(input, output) {
   ## Discrete Wavelet Transform
   
   output$dwt_plot_ml <- renderPlotly({
-  # Perform DWT on ML CoP data
-  dwt_copx <- dwt(filtered_data()$copx, filter = "d4", n.levels = 4)
-  
-  # Convert DWT results to a data frame (with frequency ranges)
-  dwt_df_ml <- dwt_to_dataframe(
-    dwt_result = dwt_copx,
-    signal_name = "ML CoP",
-    Fs = input$get_filter_frequency,  # Sampling frequency from the slider
-    n_levels = 4  # Number of decomposition levels
-  )
-  
-  # Create Plotly plot
-  plot_ly(dwt_df_ml, x = ~Time, y = ~Coefficient, color = ~Level, type = "scatter", mode = "lines") %>%
-    layout(
-      title = "DWT of ML CoP Signal",
-      xaxis = list(title = "Time"),
-      yaxis = list(title = "Coefficient Value"),
-      legend = list(title = list(text = "Level")))
-})
 
-output$dwt_plot_ap <- renderPlotly({
-  # Perform DWT on AP CoP data
-  dwt_copy <- dwt(filtered_data()$copy, filter = "d4", n.levels = 4)
+    df_segment <-analysis()$df_segment
+    
+    # Perform DWT on ML CoP data
+    dwt_copx <- dwt(df_segment$copx, filter = "d4", n.levels = 4)
   
-  # Convert DWT results to a data frame (with frequency ranges)
-  dwt_df_ap <- dwt_to_dataframe(
-    dwt_result = dwt_copy,
-    signal_name = "AP CoP",
-    Fs = input$get_filter_frequency,  # Sampling frequency from the slider
-    n_levels = 4  # Number of decomposition levels
-  )
+    # Convert DWT results to a data frame (with frequency ranges)
+    dwt_df_ml <- dwt_to_dataframe(
+      dwt_result = dwt_copx,
+      signal_name = "ML CoP",
+      Fs = input$get_filter_frequency,  # Sampling frequency from the slider
+      n_levels = 4  # Number of decomposition levels
+    )
   
-  # Create Plotly plot
-  plot_ly(dwt_df_ap, x = ~Time, y = ~Coefficient, color = ~Level, type = "scatter", mode = "lines") %>%
-    layout(
-      title = "DWT of AP CoP Signal",
-      xaxis = list(title = "Time"),
-      yaxis = list(title = "Coefficient Value"),
-      legend = list(title = list(text = "Level")))
-})
+    # Create Plotly plot
+    plot_ly(dwt_df_ml, x = ~Time, y = ~Coefficient, color = ~Level, type = "scatter", mode = "lines") %>%
+      layout(
+        title = "DWT of ML CoP Signal",
+        xaxis = list(title = "Time"),
+        yaxis = list(title = "Coefficient Value"),
+        legend = list(title = list(text = "Level")))
+  })
+
+  output$dwt_plot_ap <- renderPlotly({
+
+    df_segment <-analysis()$df_segment
+    
+    # Perform DWT on AP CoP data
+    dwt_copy <- dwt(df_segment$copy, filter = "d4", n.levels = 4)
+  
+    # Convert DWT results to a data frame (with frequency ranges)
+    dwt_df_ap <- dwt_to_dataframe(
+      dwt_result = dwt_copy,
+      signal_name = "AP CoP",
+      Fs = input$get_filter_frequency,  # Sampling frequency from the slider
+      n_levels = 4  # Number of decomposition levels
+    )
+  
+    # Create Plotly plot
+    plot_ly(dwt_df_ap, x = ~Time, y = ~Coefficient, color = ~Level, type = "scatter", mode = "lines") %>%
+      layout(
+        title = "DWT of AP CoP Signal",
+        xaxis = list(title = "Time"),
+        yaxis = list(title = "Coefficient Value"),
+        legend = list(title = list(text = "Level")))
+  })
   
   ## Output COP Sway plot 1
   output$sway_area_1 <- renderPlotly({
