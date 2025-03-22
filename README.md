@@ -31,7 +31,7 @@ The single `app.R` file can be downloaded from this github page and can be run w
 The app depends on a couple of functions from packages which are (freely) available from the CRAN package repository. You can install them in R by running the following single line code: 
 
 ``` r
-install.packages(c("shiny", "data.table", "signal", "plotly")
+install.packages(c("shiny", "data.table", "signal", "plotly", "pracma", "waveletcomp", "tidyr")
 ```
 
 Then open the  `app.R` file and press `Run App` from within RStudio. The steps to using the app are described below. 
