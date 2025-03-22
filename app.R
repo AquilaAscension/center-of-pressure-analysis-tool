@@ -5,63 +5,12 @@ library(signal)
 library(ggplot2)
 library(plotly)
 library(pracma)
-library(wavelets)
+library(WaveletComp)
+library(tidyr)
 
 # Version: 1.2.0
 # Author: T. Vredeveld (GitHub: https://github.com/tomvredeveld)
 # Version management can be found here: https://github.com/tomvredeveld/center-of-pressure-analysis-tool
-
-# Helper function for DWT to data frame conversion
-dwt_to_dataframe <- function(dwt_result, signal_name, Fs, n_levels) {
-  # Extract approximation and detail coefficients
-  approximation <- dwt_result@V[[1]]
-  details <- dwt_result@W
-  
-  # Get the length of the original signal
-  original_length <- length(dwt_result@series)
-  
-  # Calculate frequency range for approximation
-  approx_upper <- Fs / (2^(n_levels + 1))
-  approx_label <- paste0("Approximation (0-", round(approx_upper, 2), " Hz)")
-  
-  # Pad the approximation coefficients to match the original length
-  approx_padded <- approx(seq_along(approximation) * 2^dwt_result@level, approximation, n = original_length)$y
-  
-  # Create a data frame for approximation coefficients
-  approx_df <- data.frame(
-    Time = seq_len(original_length),
-    Coefficient = approx_padded,
-    Level = approx_label,
-    Signal = signal_name
-  )
-  
-  # Create a data frame for detail coefficients
-  detail_dfs <- lapply(seq_along(details), function(i) {
-    # Calculate frequency range for this detail level
-    upper <- Fs / (2^i)
-    lower <- Fs / (2^(i + 1))
-    detail_label <- paste0("Detail ", i, " (", round(lower, 2), "-", round(upper, 2), " Hz)")
-    
-    # Extract the numeric vector for the current detail level
-    detail_coeffs <- details[[i]]
-    
-    # Pad the detail coefficients to match the original length
-    detail_padded <- approx(seq_along(detail_coeffs) * 2^(i - 1), detail_coeffs, n = original_length)$y
-    
-    data.frame(
-      Time = seq_len(original_length),
-      Coefficient = detail_padded,
-      Level = detail_label,
-      Signal = signal_name
-    )
-  })
-  
-  # Combine all data frames
-  dwt_df <- do.call(rbind, c(list(approx_df), detail_dfs))
-  
-  return(dwt_df)
-}
-
 
 
 ########### UI #################
@@ -179,14 +128,47 @@ ui <- fluidPage(
                  h3("Plot of Sway Area"),
                  hr(),
                  splitLayout(cellWidths = c("50%", "50%"), plotlyOutput("sway_area_1"), plotlyOutput("sway_area_2"))),
-        tabPanel("Wavelet Analysis", 
-                 br(), 
-                 h2("Wavelet Decomposition"),
+        tabPanel("Wavelet Analysis",
+                 h2("Continuous Wavelet Transform (CWT)"),
                  hr(),
-                 p("Below, you can see the wavelet decomposition of the CoP signals."), 
-                 h3("Discrete Wavelet Transform (DWT)"),
-                 plotlyOutput("dwt_plot_ml"),
-                 plotlyOutput("dwt_plot_ap")),
+                 p("This tab provides a time-frequency analysis of the CoP signals using the Continuous Wavelet Transform (CWT). Below, you can explore the scalograms, global wavelet spectrum, and quantitative metrics for both ML (medio-lateral) and AP (antero-posterior) directions."),
+                 
+                 h3("Scalograms"),
+                 p("Scalograms show how the power (or energy) of the CoP signal varies across time (x-axis) and frequency (y-axis)."),
+                 p("- Bright colors indicate high power (strong activity) at a specific time and frequency."),
+                 p("- Dark colors indicate low power (weak activity)."),
+                 p("- Low frequencies (bottom of the plot) correspond to slow, large postural adjustments (e.g., sway)."),
+                 p("- High frequencies (top of the plot) correspond to rapid, small adjustments (e.g., corrective movements)."),
+                 plotlyOutput("scalogram_ml"),
+                 plotlyOutput("scalogram_ap"),
+                 
+                 h3("Global Wavelet Spectrum"),
+                 p("The global wavelet spectrum shows the average power across all time points for each frequency (or scale)."),
+                 p("- Peaks indicate dominant frequencies in the CoP signal."),
+                 p("- A broad spectrum suggests a wide range of frequencies contribute to the signal."),
+                 p("- A narrow spectrum suggests the signal is dominated by a few specific frequencies."),
+                 plotlyOutput("global_spectrum"),
+                 
+                 h3("Wavelet Metrics"),
+                 p("This table provides high-level metrics summarizing the wavelet analysis:"),
+                 p("- Total Variance: Total energy in the CoP signal."),
+                 p("- Dominant Scale: The frequency (or scale) with the highest power."),
+                 p("- Mean Power: Average power across all frequencies."),
+                 tableOutput("wavelet_metrics"),
+                 
+                 h3("Frequency Band Analysis"),
+                 p("This table shows the power and sample entropy for specific frequency bands:"),
+                 p("- Power: Represents the energy in each frequency band."),
+                 p("- Sample Entropy: Measures the complexity or irregularity of the signal in each frequency band."),
+                 p("- Frequency Bands: 0–0.1 Hz (low-frequency sway), 0.1–0.3 Hz (medium-frequency adjustments), 0.3–1 Hz (high-frequency corrections)."),
+                 tableOutput("frequency_band_analysis"),
+                 
+                 h3("Combined Power and Entropy Plot"),
+                 p("This plot compares the power and sample entropy across frequency bands for both ML and AP directions."),
+                 p("- Power: Higher values indicate greater energy in that frequency band."),
+                 p("- Sample Entropy: Higher values indicate greater complexity or irregularity in that frequency band."),
+                 p("- Colors: Blue = ML Power, Green = AP Power, Red = ML Entropy, Orange = AP Entropy."),
+                 plotlyOutput("combined_plot")),
         tabPanel("About", 
                  br(),
                  h2("About"),
@@ -478,54 +460,248 @@ server <- function(input, output) {
       write.csv(cop_data, file, row.names = FALSE)
     })
   
-  ## Discrete Wavelet Transform
+  ## Wavelet Analysis Stuff
   
-  output$dwt_plot_ml <- renderPlotly({
-
-    df_segment <-analysis()$df_segment
-    
-    # Perform DWT on ML CoP data
-    dwt_copx <- dwt(df_segment$copx, filter = "d4", n.levels = 4)
-  
-    # Convert DWT results to a data frame (with frequency ranges)
-    dwt_df_ml <- dwt_to_dataframe(
-      dwt_result = dwt_copx,
-      signal_name = "ML CoP",
-      Fs = input$get_filter_frequency,  # Sampling frequency from the slider
-      n_levels = 4  # Number of decomposition levels
+  # Function to perform CWT and calculate metrics
+  analyze_cop <- function(cop_signal, Fs) {
+    # Perform continuous wavelet transform
+    wavelet_data <- analyze.wavelet(
+      data.frame(cop = cop_signal),
+      loess.span = 0,
+      dt = 1/Fs,  # Time resolution (1/sampling frequency)
+      lowerPeriod = 1/Fs,  # Smallest scale (highest frequency)
+      upperPeriod = length(cop_signal)/Fs,  # Largest scale (lowest frequency)
+      make.pval = FALSE
     )
+    
+    # Extract scales (frequencies) and power matrix
+    scales <- wavelet_data$Period / Fs  # Use Period for column scales
+    power <- wavelet_data$Power  # Power matrix (time x scales)
+    
+    # Compute global wavelet spectrum (mean power across time for each scale)
+    global_power <- colMeans(power, na.rm = TRUE)
+    
+    # Align scales with global_power
+    if (length(scales) > length(global_power)) {
+      scales <- scales[1:length(global_power)]  # Truncate scales
+    } else if (length(scales) < length(global_power)) {
+      scales <- c(scales, rep(scales[length(scales)], length(global_power) - length(scales)))  # Extend scales
+    }
+    
+    # Calculate total wavelet variance (sum of global power)
+    total_variance <- sum(global_power)
+    
+    # Calculate dominant frequency (scale with maximum power)
+    dominant_scale <- scales[which.max(global_power)]
+    
+    # Debug: Print dimensions and key metrics
+    cat("Scales length:", length(scales), "\n")
+    cat("Power dimensions:", dim(power), "\n")
+    cat("Global power length:", length(global_power), "\n")
+    cat("Total variance:", total_variance, "\n")
+    cat("Dominant scale:", dominant_scale, "\n")
+    
+    return(list(
+      wavelet_data = wavelet_data,
+      global_power = global_power,
+      scales = scales,
+      total_variance = total_variance,
+      dominant_scale = dominant_scale
+    ))
+  }
   
-    # Create Plotly plot
-    plot_ly(dwt_df_ml, x = ~Time, y = ~Coefficient, color = ~Level, type = "scatter", mode = "lines") %>%
+  output$scalogram_ml <- renderPlotly({
+    df_segment <- analysis()$df_segment
+    Fs <- input$get_filter_frequency
+    
+    # Perform CWT on ML CoP data
+    ml_results <- analyze_cop(df_segment$copx, Fs)
+    wavelet_data <- ml_results$wavelet_data
+    
+    # Create scalogram
+    plot_ly(
+      x = wavelet_data$axis.1,  # Time axis
+      y = log2(wavelet_data$Period),  # Log2(scale) for better visualization
+      z = t(wavelet_data$Power),
+      type = "contour",
+      colorscale = "Viridis",
+      contours = list(showlabels = TRUE)
+    ) %>%
       layout(
-        title = "DWT of ML CoP Signal",
-        xaxis = list(title = "Time"),
-        yaxis = list(title = "Coefficient Value"),
-        legend = list(title = list(text = "Level")))
+        title = "Wavelet Power Spectrum (ML CoP)",
+        xaxis = list(title = "Time (s)"),
+        yaxis = list(title = "Scale (log2)", autorange = "reversed")
+      )
   })
-
-  output$dwt_plot_ap <- renderPlotly({
-
-    df_segment <-analysis()$df_segment
+  
+  output$scalogram_ap <- renderPlotly({
+    df_segment <- analysis()$df_segment
+    Fs <- input$get_filter_frequency
     
-    # Perform DWT on AP CoP data
-    dwt_copy <- dwt(df_segment$copy, filter = "d4", n.levels = 4)
-  
-    # Convert DWT results to a data frame (with frequency ranges)
-    dwt_df_ap <- dwt_to_dataframe(
-      dwt_result = dwt_copy,
-      signal_name = "AP CoP",
-      Fs = input$get_filter_frequency,  # Sampling frequency from the slider
-      n_levels = 4  # Number of decomposition levels
-    )
-  
-    # Create Plotly plot
-    plot_ly(dwt_df_ap, x = ~Time, y = ~Coefficient, color = ~Level, type = "scatter", mode = "lines") %>%
+    # Perform CWT on AP CoP data
+    ap_results <- analyze_cop(df_segment$copy, Fs)
+    wavelet_data <- ap_results$wavelet_data
+    
+    # Create scalogram
+    plot_ly(
+      x = wavelet_data$axis.1,
+      y = log2(wavelet_data$Period),
+      z = t(wavelet_data$Power),
+      type = "contour",
+      colorscale = "Viridis",
+      contours = list(showlabels = TRUE)
+    ) %>%
       layout(
-        title = "DWT of AP CoP Signal",
-        xaxis = list(title = "Time"),
-        yaxis = list(title = "Coefficient Value"),
-        legend = list(title = list(text = "Level")))
+        title = "Wavelet Power Spectrum (AP CoP)",
+        xaxis = list(title = "Time (s)"),
+        yaxis = list(title = "Scale (log2)", autorange = "reversed")
+      )
+  })
+  
+  output$global_spectrum <- renderPlotly({
+    df_segment <- analysis()$df_segment
+    Fs <- input$get_filter_frequency
+    
+    # Perform CWT on ML and AP CoP data
+    ml_results <- analyze_cop(df_segment$copx, Fs)
+    ap_results <- analyze_cop(df_segment$copy, Fs)
+    
+    # Extract global power spectra and scales
+    ml_power <- ml_results$global_power
+    ap_power <- ap_results$global_power
+    scales <- ml_results$scales
+    
+    # Debug: Print lengths
+    cat("ML Power length:", length(ml_power), "\n")
+    cat("AP Power length:", length(ap_power), "\n")
+    cat("Scales length:", length(scales), "\n")
+    
+    # Create global wavelet spectrum plot
+    plot_ly() %>%
+      add_lines(x = scales, y = ml_power, name = "ML CoP") %>%
+      add_lines(x = scales, y = ap_power, name = "AP CoP") %>%
+      layout(
+        title = "Global Wavelet Spectrum",
+        xaxis = list(title = "Scale (s)", type = "log"),
+        yaxis = list(title = "Average Power")
+      )
+  })
+  
+  output$wavelet_metrics <- renderTable({
+    df_segment <- analysis()$df_segment
+    Fs <- input$get_filter_frequency
+    
+    # Perform CWT on ML and AP CoP data
+    ml_results <- analyze_cop(df_segment$copx, Fs)
+    ap_results <- analyze_cop(df_segment$copy, Fs)
+    
+    # Create table of metrics
+    data.frame(
+      Direction = c("ML", "AP"),
+      Total_Variance = c(ml_results$total_variance, ap_results$total_variance),
+      Dominant_Scale = c(ml_results$dominant_scale, ap_results$dominant_scale),
+      Mean_Power = c(mean(ml_results$global_power), mean(ap_results$global_power))
+    )
+  })
+  
+  # Define frequency bands
+  freq_bands <- list(
+    "0-0.1 Hz" = c(0, 0.1),
+    "0.1-0.3 Hz" = c(0.1, 0.3),
+    "0.3-1 Hz" = c(0.3, 1)
+  )
+  
+  # Function to compute power and sample entropy for a frequency band
+  analyze_frequency_band <- function(wavelet_data, band, Fs) {
+    scales <- wavelet_data$Scale  # Use Scale attribute for column scales
+    idx <- scales >= band[1] & scales <= band[2]
+    
+    # Compute power in the band
+    band_power <- sum(wavelet_data$Power[, idx], na.rm = TRUE)
+    
+    # Extract time series for the band
+    band_series <- rowSums(wavelet_data$Power[, idx], na.rm = TRUE)
+    
+    # Compute sample entropy for the band
+    band_entropy <- sample_entropy(band_series, edim = 2, r = 0.2 * sd(band_series))
+    
+    # Return a list with named elements
+    return(list(power = band_power, entropy = band_entropy))
+  }
+  
+  # Add combined frequency band analysis to the wavelet metrics table
+  output$frequency_band_analysis <- renderTable({
+    df_segment <- analysis()$df_segment
+    Fs <- input$get_filter_frequency
+    
+    # Perform CWT on ML and AP CoP data
+    ml_results <- analyze_cop(df_segment$copx, Fs)
+    ap_results <- analyze_cop(df_segment$copy, Fs)
+    
+    # Compute power and entropy for each frequency band
+    ml_analysis <- lapply(freq_bands, function(band) {
+      analyze_frequency_band(ml_results$wavelet_data, band, Fs)
+    })
+    ap_analysis <- lapply(freq_bands, function(band) {
+      analyze_frequency_band(ap_results$wavelet_data, band, Fs)
+    })
+    
+    # Create table of frequency band analysis
+    data.frame(
+      Frequency_Band = names(freq_bands),
+      ML_Power = sapply(ml_analysis, function(x) x$power),
+      ML_Entropy = sapply(ml_analysis, function(x) x$entropy),
+      AP_Power = sapply(ap_analysis, function(x) x$power),
+      AP_Entropy = sapply(ap_analysis, function(x) x$entropy)
+    )
+  })
+  
+  output$combined_plot <- renderPlotly({
+    df_segment <- analysis()$df_segment
+    Fs <- input$get_filter_frequency
+    
+    # Perform CWT on ML and AP CoP data
+    ml_results <- analyze_cop(df_segment$copx, Fs)
+    ap_results <- analyze_cop(df_segment$copy, Fs)
+    
+    # Compute power and entropy for each frequency band
+    ml_analysis <- lapply(freq_bands, function(band) {
+      analyze_frequency_band(ml_results$wavelet_data, band, Fs)
+    })
+    ap_analysis <- lapply(freq_bands, function(band) {
+      analyze_frequency_band(ap_results$wavelet_data, band, Fs)
+    })
+    
+    # Create data frame for plotting
+    analysis_df <- data.frame(
+      Frequency_Band = rep(names(freq_bands), each = 2),
+      Metric = rep(c("Power", "Entropy"), times = length(freq_bands)),
+      ML = c(sapply(ml_analysis, function(x) x$power), sapply(ml_analysis, function(x) x$entropy)),
+      AP = c(sapply(ap_analysis, function(x) x$power), sapply(ap_analysis, function(x) x$entropy))
+    )
+    
+    # Reshape the data for plotting
+    analysis_long <- analysis_df %>%
+      pivot_longer(cols = c(ML, AP), names_to = "Direction", values_to = "Value") %>%
+      mutate(Metric_Direction = paste(Metric, Direction, sep = " "))
+    
+    # Define accessible colors
+    colors <- c(
+      "Power ML" = "#1f78b4",  # Blue
+      "Power AP" = "#33a02c",  # Green
+      "Entropy ML" = "#e31a1c",  # Red
+      "Entropy AP" = "#ff7f00"  # Orange
+    )
+    
+    # Create grouped bar plot
+    plot_ly(analysis_long, x = ~Frequency_Band, y = ~Value, color = ~Metric_Direction, 
+            colors = colors, type = "bar") %>%
+      layout(
+        title = "Power and Sample Entropy Across Frequency Bands",
+        xaxis = list(title = "Frequency Band"),
+        yaxis = list(title = "Value"),
+        barmode = "group",
+        legend = list(title = list(text = "<b>Metric and Direction</b>")))
   })
   
   ## Output COP Sway plot 1
