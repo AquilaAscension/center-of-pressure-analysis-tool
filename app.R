@@ -215,6 +215,41 @@ ui <- fluidPage(
 ########### SERVER #################
 server <- function(input, output) {
   
+  # Multivariate Sample Entropy (MSE)  Calculation
+  # Based on Richman & Moorman (2000), Physiologic time-series analysis
+  mse <- function(data, edim = 2, r = 0.2, tau = 1) {
+    # Inputs:
+    #   data: A matrix where each column is a time series (e.g., cbind(copx, copy))
+    #   edim: Embedding dimension (default = 2)
+    #   r: Tolerance (as fraction of SD; default = 0.2)
+    #   tau: Time delay (default = 1)
+    
+    N <- nrow(data)
+    nvars <- ncol(data)
+    r_scaled <- r * sd(data)  # Scale tolerance by overall SD
+    
+    # Count matches for m and m+1
+    B <- 0  # matches for m
+    A <- 0  # matches for m+1
+    
+    for (i in 1:(N - edim * tau)) {
+      for (j in (i + 1):(N - edim * tau)) {
+        # Calculate Chebyshev distance for m and m+1
+        dist_m <- max(abs(data[i, ] - data[j, ]))
+        dist_m1 <- max(abs(data[i + tau, ] - data[j + tau, ]))
+        
+        if (dist_m <= r_scaled) B <- B + 1
+        if (dist_m <= r_scaled && dist_m1 <= r_scaled) A <- A + 1
+      }
+    }
+    
+    # Avoid division by zero
+    if (B == 0 || A == 0) return(NA)
+    
+    # Return MSE
+    return(-log(A / B))
+  }
+  
   ## 95% Predicted Area Ellipse calculation Function
   # Based off the works from P. Schuber and M. Kirchner 2014 (with permission translated to R)
   # Find code here: https://github.com/tomvredeveld/predicted-ellipse-area 
@@ -366,7 +401,7 @@ server <- function(input, output) {
   timestamp_two <- reactive({
     df <- filtered_data()
     return(which.min(abs(df[, 1] - input$input_timestamp_two)))})
-
+  
   ## Set analysis, based on input. 
   analysis <- reactive({
     # Set analysis pre-allocation list
@@ -382,36 +417,40 @@ server <- function(input, output) {
     duration <- input$input_timestamp_two - input$input_timestamp_one
     
     # Calculate mean of displacement
-    mean_copx <- mean(df_segment[, 2], na.rm = TRUE)
-    mean_copy <- mean(df_segment[, 3], na.rm = TRUE)
+    mean_copx <- mean(df_segment$copx, na.rm = TRUE)
+    mean_copy <- mean(df_segment$copy, na.rm = TRUE)
     
     # Calculate STD's of displacement
-    std_copx <- sd(df_segment[, 2], na.rm = TRUE)
-    std_copy <- sd(df_segment[, 3], na.rm = TRUE)
+    std_copx <- sd(df_segment$copx, na.rm = TRUE)
+    std_copy <- sd(df_segment$copy, na.rm = TRUE)
     
     # Calculate velocity of displacement
-    mcopx <- df_segment[, 2] - mean(df_segment[, 2], na.rm = TRUE)
-    mcopy <- df_segment[, 3] - mean(df_segment[, 3], na.rm = TRUE)
+    mcopx <- df_segment$copx - mean(df_segment$copx, na.rm = TRUE)
+    mcopy <- df_segment$copy - mean(df_segment$copy, na.rm = TRUE)
     time_diff <- diff(df_segment[, 1])
     mvelo_copx <- mean(abs(diff(mcopx)) / time_diff)
     mvelo_copy <- mean(abs(diff(mcopy)) / time_diff)
     
     # Calculate resultant velocity
-    resultant_velocity <- mean(sqrt(diff(df_segment[, 2])^2 + diff(df_segment[, 3])^2) 
+    resultant_velocity <- mean(sqrt(diff(df_segment$copx)^2 + diff(df_segment$copy)^2) 
                                / diff(df_segment[, 1]))
     
     # Calculate COP pathlength by summation of Euclidian distances
     pathlength <- sum(sqrt((diff(mcopx)^2 + diff(mcopy)^2)))
     
     # Calculate 95% PEA
-    segment_pea <- pea(df_segment[, 2], df_segment[, 3], probability = 0.95)
+    segment_pea <- pea(df_segment$copx, df_segment$copy, probability = 0.95)
     
     # Calculate sample entropy for ML and AP directions
-    sampen_copx <- sample_entropy(df_segment[, 2], edim = 2, r = 0.2 * sd(df_segment[, 2]))
-    sampen_copy <- sample_entropy(df_segment[, 3], edim = 2, r = 0.2 * sd(df_segment[, 3]))
+    sampen_copx <- sample_entropy(df_segment$copx, edim = 2, r = 0.2 * sd(df_segment$copx))
+    sampen_copy <- sample_entropy(df_segment$copy, edim = 2, r = 0.2 * sd(df_segment$copy))
+    
+    # Calculate Multivariate Sample Entropy
+    cop_2d <- cbind(df_segment$copx, df_segment$copy)
+    multivar_sampen <- mse(cop_2d, edim = 2, r = 0.2)
     
     # Put values in one table to return.
-    cop_table <- as.data.frame(matrix(NA, nrow = 12, ncol = 3))
+    cop_table <- as.data.frame(matrix(NA, nrow = 13, ncol = 3))
     names(cop_table) <- c("COP Parameter", "Value", "Units")
     cop_parameters <- c("Segment Duration",
                         "mean displacement - COP medio-lateral", 
@@ -423,16 +462,19 @@ server <- function(input, output) {
                         "resultant velocity",
                         "CoP Pathlength", "CoP 95% PEA",
                         "sample entropy - COP medio-lateral",
-                        "sample entropy - COP antero-posterior")
+                        "sample entropy - COP antero-posterior",
+                        "multivariate sample entropy")
+                        
     cop_table[, 1] <- cop_parameters
     cop_table[, 2] <- c(duration, mean_copx, mean_copy, std_copx, std_copy, 
                         mvelo_copx, mvelo_copy, resultant_velocity, 
-                        pathlength, segment_pea$area, sampen_copx, sampen_copy)
+                        pathlength, segment_pea$area, 
+                        sampen_copx, sampen_copy, multivar_sampen)
     cop_table[, 3] <- c("in seconds", "in centimeter", "in centimeter", 
                         "in centimeter", "in centimeter", 
                         "in centimeter per second", "in centimeter per second",
                         "in centimeter per second", "in centimeters", "in cm2",
-                        "unitless", "unitless")
+                        "unitless", "unitless", "unitless")
     
     # Add objects to a list.
     analysis$cop_table <- cop_table
@@ -451,7 +493,9 @@ server <- function(input, output) {
   ## Download option for COP parameters
   output$download_cop <- downloadHandler(
     filename = function() {
-      paste("cop_parameters_", Sys.Date(), ".csv", sep = "")  # File name with today's date
+      # name file according to uploaded
+      file_name <- tools::file_path_sans_ext(input$file$name)
+      paste0(file_name, "_copParameters.csv")
     },
     content = function(file) {
       # Get the COP parameters table
